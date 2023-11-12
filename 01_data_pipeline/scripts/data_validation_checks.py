@@ -31,7 +31,14 @@ def raw_data_schema_check():
     SAMPLE USAGE
         raw_data_schema_check
     '''
-   
+    
+    df_raw_data = pd.read_csv(DATA_DIRECTORY+'leadscoring.csv')
+    
+    check = set(df_raw_data.columns) == set(raw_data_schema)
+    if check:
+        print('Raw datas schema is in line with the schema present in schema.py')
+    else:
+        print('Raw datas schema is NOT in line with the schema present in schema.py')
 
 ###############################################################################
 # Define function to validate model's input schema
@@ -58,7 +65,16 @@ def model_input_schema_check():
     SAMPLE USAGE
         raw_data_schema_check
     '''
+    cnx = sqlite3.connect(DB_PATH+DB_FILE_NAME)
     
+    df_model_input = pd.read_sql('select * from model_input', cnx)
+    
+    check = set(df_model_input.columns) == set(model_input_schema)
+    if check:
+        print('Models input schema is in line with the schema present in schema.py')
+    else:
+        print('Models input schema is NOT in line with the schema present in schema.py')
+
 
     
     

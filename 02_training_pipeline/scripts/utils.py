@@ -27,6 +27,8 @@ from sklearn.metrics import accuracy_score
 from Lead_scoring_training_pipeline.constants import *
 
 
+
+
 ###############################################################################
 # Define the function to encode features
 # ##############################################################################
@@ -55,7 +57,40 @@ def encode_features():
     **NOTE : You can modify the encode_featues function used in heart disease's inference
         pipeline from the pre-requisite module for this.
     '''
+    # read the model input data
+    cnx = sqlite3.connect(DB_PATH+DB_FILE_NAME)
+    df_model_input = pd.read_sql('select * from model_input', cnx)
 
+    # create df to hold encoded data and intermediate data
+    df_encoded = pd.DataFrame(columns=ONE_HOT_ENCODED_FEATURES)
+    df_placeholder = pd.DataFrame()
+
+    # encode the features using get_dummies()
+    for f in FEATURES_TO_ENCODE:
+        if(f in df_model_input.columns):
+            encoded = pd.get_dummies(df_model_input[f])
+            encoded = encoded.add_prefix(f + '_')
+            df_placeholder = pd.concat([df_placeholder, encoded], axis=1)
+        else:
+            print('Feature not found')
+            return df_model_input
+
+    # add the encoded features into a single dataframe
+    for feature in df_encoded.columns:
+        if feature in df_model_input.columns:
+            df_encoded[feature] = df_model_input[feature]
+        if feature in df_placeholder.columns:
+            df_encoded[feature] = df_placeholder[feature]
+    df_encoded.fillna(0, inplace=True)
+
+    # save the features and target in separate tables
+    df_features = df_encoded.drop(['app_complete_flag'], axis=1)
+    df_target = df_encoded[['app_complete_flag']]
+    df_features.to_sql(name='features', con=cnx,
+                       if_exists='replace', index=False)
+    df_target.to_sql(name='target', con=cnx, if_exists='replace', index=False)
+
+    cnx.close()
 
 ###############################################################################
 # Define the function to train the model
@@ -83,5 +118,37 @@ def get_trained_model():
     SAMPLE USAGE
         get_trained_model()
     '''
+    # set the tracking uri and experiment
+    mlflow.set_tracking_uri(TRACKING_URI)
+    mlflow.set_experiment(EXPERIMENT)
+
+    # read the input data
+    cnx = sqlite3.connect(DB_PATH+DB_FILE_NAME)
+    df_features = pd.read_sql('select * from features', cnx)
+    df_target = pd.read_sql('select * from target', cnx)
+
+    # split the dataset into train and test
+    X_train, X_test, y_train, y_test = train_test_split(
+        df_features, df_target, test_size=0.3, random_state=0)
+
+    # start mlflow experiment
+    with mlflow.start_run(run_name='run_LightGB') as mlrun:
+
+        # train the model using LGBM Classifier on train dataset
+        clf = lgb.LGBMClassifier()
+        clf.set_params(**model_config)
+        clf.fit(X_train, y_train)
+
+        # log model in mlflow model registry
+        mlflow.sklearn.log_model(
+            sk_model=clf, artifact_path="models", registered_model_name='LightGBM')
+        mlflow.log_params(model_config)
+
+        # predict the results on test dataset
+        y_pred = clf.predict(X_test)
+
+        # log auc in mlflow
+        auc = roc_auc_score(y_pred, y_test)
+        mlflow.log_metric('auc', auc)
 
    

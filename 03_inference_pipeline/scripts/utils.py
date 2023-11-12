@@ -46,6 +46,37 @@ def encode_features():
         encode_features()
     '''
 
+    # read the model input data
+    cnx = sqlite3.connect(DB_PATH+DB_FILE_NAME)
+    df_model_input = pd.read_sql('select * from model_input', cnx)
+
+    # create df to hold encoded data and intermediate data
+    df_encoded = pd.DataFrame(columns=ONE_HOT_ENCODED_FEATURES)
+    df_placeholder = pd.DataFrame()
+
+    # encode the features using get_dummies()
+    for f in FEATURES_TO_ENCODE:
+        if(f in df_model_input.columns):
+            encoded = pd.get_dummies(df_model_input[f])
+            encoded = encoded.add_prefix(f + '_')
+            df_placeholder = pd.concat([df_placeholder, encoded], axis=1)
+        else:
+            print('Feature not found')
+            return df_model_input
+
+    # add the encoded features into a single dataframe
+    for feature in df_encoded.columns:
+        if feature in df_model_input.columns:
+            df_encoded[feature] = df_model_input[feature]
+        if feature in df_placeholder.columns:
+            df_encoded[feature] = df_placeholder[feature]
+    df_encoded.fillna(0, inplace=True)
+
+    # save the features and target in separate tables
+    df_encoded.to_sql(name='features_inference', con=cnx,
+                       if_exists='replace', index=False)
+
+    cnx.close()
 ###############################################################################
 # Define the function to load the model from mlflow model registry
 # ##############################################################################
@@ -70,6 +101,25 @@ def get_models_prediction():
     SAMPLE USAGE
         load_model()
     '''
+    # set the tracking uri
+    mlflow.set_tracking_uri(TRACKING_URI)
+
+    # load the latest model from production stage
+    loaded_model = mlflow.pyfunc.load_model(
+        model_uri=f"models:/{MODEL_NAME}/{STAGE}")
+
+    # read the new data
+    cnx = sqlite3.connect(DB_PATH+DB_FILE_NAME)
+    df_new_data = pd.read_sql('select * from features_inference', cnx)
+
+    # run the model to generate the prediction on new data
+    y_pred = loaded_model.predict(df_new_data)
+    df_new_data['pred_app_complete_flag'] = y_pred
+
+    # store the data in a table
+    df_new_data.to_sql(name='predicted_values', con=cnx,
+                       if_exists='replace', index=False)
+    cnx.close()
 
 ###############################################################################
 # Define the function to check the distribution of output column
@@ -97,6 +147,20 @@ def prediction_ratio_check():
     SAMPLE USAGE
         prediction_col_check()
     '''
+    # read the input data
+    cnx = sqlite3.connect(DB_PATH+DB_FILE_NAME)
+    df = pd.read_sql('select * from predicted_values', cnx)
+
+    # get the distribution of categories in prediction col
+    value_counts = df['pred_app_complete_flag'].value_counts(normalize=True)
+
+    # write the output in a file
+    ct = datetime.now()
+    st = str(ct)+' %of 1 = ' + \
+        str(value_counts[1])+' %of 2 ='+str(value_counts[0])
+    with open(FILE_PATH+'prediction_distribution.txt', 'a') as f:
+        f.write(st+"\n")
+
 ###############################################################################
 # Define the function to check the columns of input features
 # ##############################################################################
@@ -123,4 +187,14 @@ def input_features_check():
     SAMPLE USAGE
         input_col_check()
     '''
-   
+    # read the input data
+    cnx = sqlite3.connect(DB_PATH+DB_FILE_NAME)
+    df = pd.read_sql('select * from features_inference', cnx)
+
+    # check if all columns are present
+    check = set(df.columns) == set(ONE_HOT_ENCODED_FEATURES)
+
+    if check:
+        print('All the models input are present')
+    else:
+        print('Some of the models inputs are missing')
